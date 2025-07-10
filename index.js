@@ -1,23 +1,25 @@
 const TelegramBot = require('node-telegram-bot-api');
 
-// قراءة التوكن من متغير البيئة
-const token = process.env.BOT_TOKEN;
+// توكن البوت (مضمّن مباشرة)
+const token = '7619814993:AAFSs9zig8B0vzqTmWpRPUNsYVXQ8QOEunM';
 
 if (!token) {
-  console.error('Error: BOT_TOKEN environment variable is not set.');
-  process.exit(1);
+  throw new Error('BOT_TOKEN not provided');
 }
 
+// إنشاء البوت مع تفعيل الاستطلاع (polling)
 const bot = new TelegramBot(token, { polling: true });
 
-// الرد على أمر /start
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'أهلاً! بوت التليجرام شغال 24/7 🔥');
-});
+// رسالة ترحيب عند بدء البوت
+console.log('Telegram bot started successfully.');
 
-// مثال: الرد على كلمة "سلام"
+// استماع للرسائل النصية
 bot.on('message', (msg) => {
-  if (msg.text && msg.text.toLowerCase().includes('سلام')) {
-    bot.sendMessage(msg.chat.id, 'وعليكم السلام 🌟');
-  }
+  const chatId = msg.chat.id;
+  const text = msg.text || '';
+
+  console.log(`Received message from ${chatId}: ${text}`);
+
+  // رد بسيط: يرد بنفس الرسالة مع جملة "أنت قلت:"
+  bot.sendMessage(chatId, `أنت قلت: ${text}`);
 });
