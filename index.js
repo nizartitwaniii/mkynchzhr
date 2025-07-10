@@ -1,101 +1,140 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const bodyParser = require('body-parser');
 const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('path');
 
-const BOT_TOKEN = '7619814993:AAFSs9zig8B0vzqTmWpRPUNsYVXQ8QOEunM';
+// ======================
+// *** إعدادات عامة ***
+// ======================
+
+// ضع توكن بوت التليجرام هنا (من BotFather)
+const BOT_TOKEN = process.env.BOT_TOKEN || '7619814993:AAFSs9zig8B0vzqTmWpRPUNsYVXQ8QOEunM';
+
+// بورت السيرفر (يمكن Koyeb يعطيه تلقائياً)
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'scripts.json');
 
 const app = express();
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const server = http.createServer(app);
+const io = socketIo(server);
 
-let scriptsDB = {};
+app.use(bodyParser.json({ limit: '10kb' }));
 
-// تحميل السكربتات من الملف عند بدء التشغيل
+// ملف حفظ السكربتات
+const DB_FILE = 'scripts.json';
+let scriptDB = {};
+
+// تحميل السكربتات من الملف
 async function loadScripts() {
   try {
-    const exists = await fs.access(DATA_FILE).then(() => true).catch(() => false);
-    if (exists) {
-      const raw = await fs.readFile(DATA_FILE, 'utf8');
-      scriptsDB = JSON.parse(raw);
-      console.log('Scripts loaded.');
+    if (await fs.access(DB_FILE).then(() => true).catch(() => false)) {
+      const raw = await fs.readFile(DB_FILE, 'utf8');
+      scriptDB = JSON.parse(raw);
+      console.log('✅ Loaded scripts from file.');
     }
-  } catch (e) {
-    console.error('Failed to load scripts:', e);
+  } catch (err) {
+    console.error('❌ Load error:', err);
   }
 }
 
 // حفظ السكربتات في الملف
 async function saveScripts() {
   try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(scriptsDB, null, 2));
-    console.log('Scripts saved.');
-  } catch (e) {
-    console.error('Failed to save scripts:', e);
+    await fs.writeFile(DB_FILE, JSON.stringify(scriptDB, null, 2));
+    console.log('✅ Scripts saved to file.');
+  } catch (err) {
+    console.error('❌ Save error:', err);
   }
 }
 
 loadScripts();
 
-app.use(express.json());
+// ==========================
+// *** إعداد بوت التليجرام ***
+// ==========================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// صفحة الترحيب
-app.get('/', (req, res) => {
-  res.send('Welcome to the Roblox Script Protection Service!');
+// رسالة ترحيب / start
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, 'أهلاً! أرسل لي سكربت روبلوكس لأقوم بحمايته لك.');
 });
 
-// رابط السكربت
-app.get('/script.lua', (req, res) => {
-  const id = req.query.id;
-  if (!id || !scriptsDB[id]) return res.status(404).send('Invalid or expired script link.');
-
-  const ua = req.headers['user-agent'] || '';
-  // فقط قبول طلبات من روبلوكس
-  if (!ua.includes('Roblox') && !ua.includes('HttpGet')) {
-    return res.status(403).send('Access denied: Roblox only.');
-  }
-
-  res.type('text/plain').send(scriptsDB[id].script);
-});
-
-// بوت تلجرام - استقبال الرسائل
+// استقبال الرسائل النصية (سكربتات)
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text?.trim();
 
-  if (!text) return;
+  // تجاهل أوامر بوت
+  if (msg.text.startsWith('/')) return;
 
-  if (text.toLowerCase() === '/start') {
-    bot.sendMessage(chatId, `مرحباً! أرسل لي سكربت روبلوكس لتحصل على رابط حماية خاص.`);
+  const script = msg.text.trim();
+  if (!script) {
+    bot.sendMessage(chatId, 'الرجاء إرسال سكربت صالح.');
     return;
   }
 
-  // تخزين السكربت
-  // توليد ID فريد
-  const scriptId = crypto.randomBytes(8).toString('hex');
+  // توليد ID عشوائي
+  const id = crypto.randomBytes(8).toString('hex');
 
-  scriptsDB[scriptId] = {
-    userId: chatId,
-    script: text,
-    createdAt: new Date().toISOString()
+  // حفظ السكربت مع معرف المستخدم
+  scriptDB[id] = {
+    script,
+    userId: chatId.toString(),
+    createdAt: new Date().toISOString(),
   };
-
   await saveScripts();
 
-  // توليد رابط التحميل
-  const host = process.env.HOST || `http://localhost:${PORT}`;
-  const url = `${host}/script.lua?id=${scriptId}`;
-
-  // توليد loadstring
+  // رابط التحميل الخاص بالسكربت
+  const url = `https://${process.env.DOMAIN || 'yourdomain.com'}/script.lua?id=${id}`;
   const loadstring = `loadstring(game:HttpGet("${url}"))()`;
 
-  // إرسال الرد
-  bot.sendMessage(chatId, `✅ تم حفظ السكربت بنجاح!\n\n🔗 رابط السكربت:\n${url}\n\n🎮 Loadstring:\n${loadstring}`);
+  bot.sendMessage(chatId, `تم حماية سكربتك! استخدم هذا الـ loadstring:\n\n${loadstring}`);
 });
 
-// تشغيل السيرفر
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// ==========================
+// *** إعدادات السيرفر Express ***
+// ==========================
+
+app.get('/', (req, res) => {
+  res.send('🚀 بوت حماية سكربتات روبلوكس يعمل!');
+});
+
+// استرجاع السكربت بصيغة Lua (لـ loadstring)
+app.get('/script.lua', (req, res) => {
+  const id = req.query.id;
+  if (!id || !scriptDB[id]) {
+    return res.status(404).send('رابط غير صالح أو منتهي!');
+  }
+
+  // تحقق أن الطلب يأتي من Roblox HttpGet (ببساطة)
+  const userAgent = req.headers['user-agent'] || '';
+  const isRoblox = userAgent.includes('Roblox') || userAgent.includes('HttpGet');
+  if (!isRoblox) {
+    return res.status(403).send('الوصول مرفوض: هذا الرابط مخصص لتنفيذ داخل Roblox فقط.');
+  }
+
+  res.type('text/plain').send(scriptDB[id].script);
+});
+
+// ==========================
+// *** Socket.IO للأونلاين ***
+// ==========================
+let onlineUsers = 0;
+io.on('connection', (socket) => {
+  onlineUsers++;
+  io.emit('onlineUsers', onlineUsers);
+
+  socket.on('disconnect', () => {
+    onlineUsers--;
+    io.emit('onlineUsers', onlineUsers);
+  });
+});
+
+// ==========================
+// *** بدء السيرفر ***
+// ==========================
+server.listen(PORT, () => {
+  console.log(`🚀 السيرفر يعمل على البورت ${PORT}`);
 });
